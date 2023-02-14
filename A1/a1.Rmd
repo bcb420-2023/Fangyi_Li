@@ -1,0 +1,351 @@
+---
+title: "BCB420 - Computational System Biology"
+subtitle: "Assignment #1 - Data Set Selection and Initial Processing"
+author: "Fangyi Li"
+date: "February 14th, 2023"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+bibliography: a1_citations.bib
+nocite: '@*'
+---
+
+# 1. Select an Expression Data Set
+
+## 1.1 Setup
+Below are the packages needed for this assignment.
+```{r setup, message=FALSE, warning=FALSE}
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+library(BiocManager)
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE)) {
+  BiocManager::install("GEOmetadb")
+}
+library(GEOmetadb)
+
+if (!requireNamespace("biomaRt", quietly = TRUE)) {
+  BiocManager::install("biomaRt")
+}
+library(biomaRt)
+
+if (!requireNamespace("edgeR", quietly = TRUE)) {
+  install.packages("edgeR")
+}
+library(edgeR)
+
+if (!requireNamespace("DBI", quietly = TRUE)) {
+  install.packages("DBI")
+}
+library(DBI)
+
+if (!requireNamespace("limma", quietly = TRUE)) {
+  install.packages("limma")
+}
+library(limma)
+
+if(!requireNamespace("knitr", quietly=TRUE)) {
+  install.packages("knitr")
+}
+library(knitr)
+
+if(!requireNamespace("kableExtra", quietly=TRUE)) {
+  install.packages("kableExtra")
+}
+library(kableExtra)
+```
+
+## 1.2 Search the Data Set
+
+```{r connect, message=FALSE, warning=FALSE}
+# Set the meta data
+if (!file.exists('GEOmetadb.sqlite')) {
+  GEOmetadb::getSQLiteFile()
+}
+
+# Connect to newly downloaded GEO meta data database
+con <- DBI::dbConnect(RSQLite::SQLite(), 'GEOmetadb.sqlite')
+```
+
+```{r search, message=FALSE, warning=FALSE}
+# Search expression data about breast cancer
+sql <- paste("SELECT DISTINCT gse.title,gse.gse, gpl.title,",
+             " gse.submission_date,",
+             " gse.supplementary_file",
+             "FROM",
+             "  gse JOIN gse_gpl ON gse_gpl.gse=gse.gse",
+             "  JOIN gpl ON gse_gpl.gpl=gpl.gpl",
+             "WHERE",
+             "  gse.submission_date > '2013-01-01' AND",
+             "  gse.title LIKE '%breast cancer%' AND", 
+             "  gpl.organism LIKE '%Homo sapiens%' AND",
+             "  gpl.technology LIKE '%high-throughput sequencing%' ",
+             "  ORDER BY gse.submission_date DESC",
+             sep=" ")
+
+rs <- DBI::dbGetQuery(con, sql)
+
+counts_files <- rs$supplementary_file[grep(rs$supplementary_file,
+                                           pattern = "count|cnt",
+                                           ignore.case = TRUE)]
+```
+
+## 1.3 Download the Data Set
+
+```{r download data, message=FALSE, warning=FALSE}
+# Get expression data
+geo_id <- "GSE89225"
+
+sfiles <- GEOquery::getGEOSuppFiles(geo_id)
+fnames <- rownames(sfiles)
+
+tcell_exp <- read.csv(fnames[1], header = TRUE, check.names = FALSE)
+colnames(tcell_exp)[1] <- "ensembl_gene_id"
+
+tcell_exp[1:15, 1:5] %>%
+  kableExtra::kbl(caption = "GSE89225 T Cell Expression Dataframe") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+
+
+# 2. Clean the Data and Map to HUGO Symbols
+
+## 2.1 Define the Groups
+```{r group, message=FALSE, warning=FALSE}
+samples <- data.frame(lapply(colnames(tcell_exp)[2:35], 
+                             FUN=function(x){unlist(strsplit(x, split = "_"))}))
+colnames(samples) <- colnames(tcell_exp)[2:35]
+rownames(samples) <- c("Tcell_type","tissue_type", "patients")
+samples <- data.frame(t(samples))
+
+samples[1:10, ] %>%
+  kableExtra::kbl(caption = "Groups of Samples") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+
+## 2.2 Clean the Data Set
+```{r duplicate, message=FALSE, warning=FALSE}
+# Check for duplicated genes
+summarized_gene_counts <- sort(table(tcell_exp$ensembl_gene_id), decreasing = TRUE)
+
+table(tcell_exp$ensembl_gene_id)[1:15] %>%
+  kableExtra::kbl(caption = "Ensembl Gene Frequency") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+
+There's no duplicated gene, but there are 5 invalid Ensembl gene ids:__alignment_not_unique, __ambiguous, __no_feature, __not_aligned and __too_low_aQual.
+```{r remove invalid, message=FALSE, warning=FALSE}
+# Remove invalid Ensenbl gene ids
+valid_tcell_exp <- tcell_exp[grep("ENSG", tcell_exp$ensembl_gene_id), ]
+```
+
+In the edgeR protocol, it is recommended to remove weakly expressed and non-informative features without at least 1 read per million in n of the samples, where n is the size of the smallest group of replicates. There are 10 samples (patients) for each group in this data set, so n = 10.
+```{r outliers, message=FALSE, warning=FALSE}
+# Translate out counts into counts per million
+cpms <- edgeR::cpm(valid_tcell_exp[, 2:35])
+rownames(cpms) <- valid_tcell_exp[, 1]
+keep <- rowSums(cpms > 1) >= 10
+filtered_tcell_exp <- valid_tcell_exp[keep, ]
+
+# Check changes
+filter_result <- data.frame(tcell_exp = nrow(tcell_exp), valid_tcell_exp = nrow(valid_tcell_exp), filtered_tcell_exp = nrow(filtered_tcell_exp))
+rownames(filter_result)[1] <- "Number of Ensembl Genes"
+
+filter_result %>%
+  kableExtra::kbl(caption = "T Cell Expression Filtering Result") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+In total, 45732 rows have been removed, including 5 invalid genes and 45727 low-counts genes.
+
+## 2.3 Map to HUGO Symbols
+```{r id_conversion, message=FALSE, warning=FALSE}
+# Connect to the desired mart
+ensembl <- biomaRt::useMart("ensembl")
+
+# Get the set of datasets availble
+datasets <- biomaRt::listDatasets(ensembl)
+
+# Limit to the human datasets availble
+ensembl <- biomaRt::useDataset("hsapiens_gene_ensembl", mart=ensembl)
+
+conversion_stash <- "tcell_id_conversion.rds"
+
+if (file.exists(conversion_stash)) {
+  tcell_id_conversion <- readRDS(conversion_stash)
+} else {
+  tcell_id_conversion <- biomaRt::getBM(attributes = c("ensembl_gene_id","hgnc_symbol"), 
+                                      filters = c("ensembl_gene_id"), 
+                                      values = filtered_tcell_exp$ensembl_gene_id,
+                                      mart = ensembl)
+  saveRDS(tcell_id_conversion, conversion_stash)
+}
+```
+Now, we are ready to merge the id conversion with our filtered data set.
+```{r merge, message=FALSE, warning=FALSE}
+# Annotated version
+annot_tcell_exp <- merge(tcell_id_conversion, filtered_tcell_exp, all.y = TRUE)
+
+annot_tcell_exp[1:5,1:5] %>%
+  kableExtra::kbl(caption = "HGNC Symbol Mapped Data Set") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+
+# Missing part
+ensembl_id_missing_gene <- annot_tcell_exp$ensembl_gene_id[which(is.na(annot_tcell_exp$hgnc_symbol))]
+length(ensembl_id_missing_gene)
+missing_tcell_exp <- annot_tcell_exp[which(is.na(annot_tcell_exp$hgnc_symbol)),]
+
+missing_tcell_exp[1:5,1:5] %>%
+  kableExtra::kbl(caption = "HGNC Symbol Missing Data Set") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# 3. Apply Normalization
+
+## 3.1 Trimmed Mean of M-values (TMM) Normalization
+We first saved the previous annotated version as the original tcell expression for future comparison.
+```{r save original, message=FALSE, warning=FALSE}
+original_tcell_exp <- annot_tcell_exp
+
+original_tcell_exp[1:5,1:5] %>%
+  kableExtra::kbl(caption = "Original Data Set") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+Next, we used the TMM normalization technique for RNASeq with the edgeR package.
+```{r tmm, message=FALSE, warning=FALSE}
+# Create an edgeR container for RNASeq count data
+original_data_matrix <- as.matrix(original_tcell_exp[, 3:36])
+rownames(original_data_matrix) <- original_tcell_exp$ensembl_gene_id
+
+# Calculate the normalization factors
+d <- edgeR::DGEList(counts = original_data_matrix, group = samples$tissue_type)
+d <- edgeR::calcNormFactors(d)
+
+normalized_tcell_exp <- edgeR::cpm(d)
+normalized_tcell_exp <- cbind(original_tcell_exp[, 1:2], normalized_tcell_exp)
+rownames(normalized_tcell_exp) <- NULL
+
+normalized_tcell_exp[1:5,1:5] %>%
+  kableExtra::kbl(caption = "Normalized Data Set") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
+
+## 3.2 Box Plots
+```{r original_box, message=FALSE, warning=FALSE}
+original_box <- log2(cpm(original_tcell_exp[, 3:36]))
+boxplot(original_box, xlab = "Samples", ylab = "log2 CPM", 
+        las = 2, cex = 0.5, cex.lab = 0.5, cex.axis = 0.5, 
+        main = "T Cell RNASeq Samples - Original")
+abline(h = median(apply(original_box, 2, median)), col = "red", lwd = 0.6, lty = "dashed")
+```
+
+```{r normalized_box, message=FALSE, warning=FALSE}
+normalized_box <- log2(cpm(normalized_tcell_exp[, 3:36]))
+boxplot(normalized_box, xlab = "Samples", ylab = "log2 CPM", las = 2, 
+        cex = 0.5, cex.lab = 0.5, cex.axis = 0.5, 
+        main = "T Cell RNASeq Samples - Normalized")
+abline(h = median(apply(normalized_box, 2, median)), col = "red", lwd = 0.6, lty = "dashed")
+
+```
+
+## 3.3 Density Plots
+```{r original_density, message=FALSE, warning=FALSE}
+original_density <- apply(log2(cpm(original_tcell_exp[, 3:36])), 2, density)
+
+xlim1 <- 0
+ylim1 <- 0
+
+for (i in 1:length(original_density)) {
+  xlim1 <- range(c(xlim1, original_density[[i]]$x))
+  ylim1 <- range(c(ylim1, original_density[[i]]$y))
+}
+
+cols1 <- rainbow(length(original_density))
+ltys1 <- rep(1, length(original_density))
+
+plot(original_density[[1]], xlim = xlim1, ylim = ylim1, type = "n",
+     ylab = "Smoothing density of log2-CPM", 
+     main = "Density Plot - Original", cex.lab = 0.85)
+
+for (i in 1:length(original_density)) {
+  lines(original_density[[i]], col = cols1[i], lty = ltys1[i])
+}
+
+legend("topright", colnames(original_box), col = cols1, lty = ltys1, cex = 0.75, 
+       border = "black", text.col = cols1, merge = TRUE, bg = "white")
+```
+
+```{r normalized_density, message=FALSE, warning=FALSE}
+normalized_density <- apply(log2(cpm(normalized_tcell_exp[, 3:36])), 2, density)
+
+xlim2 <- 0
+ylim2 <- 0
+
+for (i in 1:length(normalized_density)) {
+  xlim2 <- range(c(xlim2, normalized_density[[i]]$x))
+  ylim2 <- range(c(ylim2, normalized_density[[i]]$y))
+}
+
+cols2 <- rainbow(length(normalized_density))
+ltys2 <- rep(1, length(normalized_density))
+
+plot(normalized_density[[1]], xlim = xlim2, ylim = ylim2, type = "n", 
+     ylab = "Smoothing density of log2-CPM", 
+     main = "Density Plot - Normalized", cex.lab = 0.85)
+
+for (i in 1:length(normalized_density)) {
+  lines(normalized_density[[i]], col = cols2[i], lty = ltys2[i])
+}
+
+legend("topright", colnames(normalized_box), col = cols2, lty = ltys2, cex = 0.75, 
+       border = "black", text.col = cols2, merge = TRUE, bg = "white")
+```
+
+## 3.4 Multidimensional Scaling (MDS) Plot
+```{r original_MDS, message=FALSE, warning=FALSE}
+limma::plotMDS(original_tcell_exp[, 3:36], 
+               labels = samples$tissue_type, 
+               col = c("darkgreen", "red")[factor(samples$tissue_type)],
+               main = "MDS Plot - Original")
+```
+
+```{r normalized_MDS, message=FALSE, warning=FALSE}
+limma::plotMDS(normalized_tcell_exp[, 3:36], 
+               labels = samples$tissue_type, 
+               col = c("darkgreen", "red")[factor(samples$tissue_type)],
+               main = "MDS Plot - Normalized")
+```
+
+# 4. Interpret and Document
+
+## 4.1 Questions
+
+### What are the control and test conditions of the dataset?
+The control conditions are cells and tissues' environments (eg. treatment, growth and extraction protocol, etc...). The test conditions are different cells (regulatory T cells and conventional CD4 T cells) and different tissues (tumor, normal breast parenchyma, peripheral blood).
+
+### Why is the dataset of interest to you?
+Breast cancer was my first genetic topic in high school, it has a close relation to gene mutations. This data set belongs to a published paper within 10 years, and it contains detailed data labeling and reasonable sample size for personal analysis.
+
+### Were there expression values that were not unique for specific genes? How did you handle these?
+I checked the frequency of each Ensembl gene id to eliminate any duplicated gene. There was no duplicated gene, but there were 5 invalid Ensembl gene ids that I removed in section *2.2 Clean the Data Set*.
+
+### Were there expression values that could not be mapped to current HUGO symbols?
+Yes, there were 642 (~3.6%) Ensembl gene ids that could not be mapped to current HUGO symbols. I cannot check their potential HUGO symbols since the data set lacks of a column for gene name. However, I decided to keep them in my data set since they might be helpful for my future analysis.
+
+### How many outliers were removed?
+45,727 outliers have been removed from the data set according to edgeR protocol about low-counts features. Filtering details are shown in section *2.2 Clean the Data Set*.
+
+### How did you handle replicates?
+I checked for replicates in section *2.2 Clean the Data Set*, and there was none.
+
+### What is the final coverage of your dataset?
+The final coverage of my data set is 17,950 genes and 34 samples (10 patients).
+
+
+```{r, message=FALSE, warning=FALSE}
+
+```
+
+## 4.2 References
