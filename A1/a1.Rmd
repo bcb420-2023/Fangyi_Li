@@ -266,7 +266,7 @@ abline(h = median(apply(normalized_box, 2, median)), col = "red", lwd = 0.6, lty
 There is no significant difference between the original and normalized data set.
 
 ## 3.3 Density Plots
-The density plots of the original and normalized data sets are shown below.
+The density plots of the original and normalized data sets are shown below. 
 ```{r original_density, message=FALSE, warning=FALSE}
 original_density <- apply(log2(cpm(original_tcell_exp[, 3:36])), 2, density)
 
@@ -319,7 +319,7 @@ legend("topright", colnames(normalized_box), col = cols2, lty = ltys2, cex = 0.7
        border = "black", text.col = cols2, merge = TRUE, bg = "white")
 ```
 
-There is no significant difference between the original and normalized data set.
+There is no significant difference between the original and normalized data set. They both exhibit a binomial distribution.
 
 ## 3.4 Multidimensional Scaling (MDS) Plot
 The MDS plots of the original and normalized data sets are shown below.
@@ -339,12 +339,31 @@ limma::plotMDS(normalized_tcell_exp[, 3:36],
 
 There is a significant difference between the original and normalized data sets. After normalization, the NBP group clusters to the left, and the tumor group clusters in the middle.
 
+## 3.5 Dispersion
+Graph the biological coefficient of variation (BCV) for genes.
+```{r}
+model_design <- model.matrix(~samples$patients + samples$tissue_type+0)
+
+disp <- edgeR::estimateDisp(d, model_design)
+edgeR::plotBCV(disp, col.tagwise = "black", col.common = "red")
+```
+
+Create a visual representation of the mean-variance relationship. 
+```{r}
+edgeR::plotMeanVar(disp, show.raw.vars = TRUE,
+                   show.tagwise.vars = TRUE,
+                   show.ave.raw.vars = TRUE,
+                   NBline = TRUE,
+                   show.binned.common.disp.vars = TRUE)
+```
+
+
 # 4. Interpret and Document
 ***
 ## 4.1 Questions
 
 ### What are the control and test conditions of the dataset?
-The control conditions are cells and tissues' environments (e.g. treatment, growth and extraction protocol). The test conditions are different cells (regulatory T cells and conventional CD4 T cells) and different tissues (tumor, normal breast parenchyma, peripheral blood).
+The control condition is the normal breast parenchyma (NBP) tissue, and the test condition is the tumor tissue.
 
 ### Why is the dataset of interest to you?
 Breast cancer was my first genetic topic in high school and is closely related to gene mutations. This data set belongs to a published paper within ten years and contains detailed data labelling and a reasonable sample size for personal analysis.
