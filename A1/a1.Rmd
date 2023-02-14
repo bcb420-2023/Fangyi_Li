@@ -12,7 +12,7 @@ nocite: '@*'
 ---
 
 # 1. Select an Expression Data Set
-
+***
 ## 1.1 Setup
 Below are the packages needed for this assignment.
 ```{r setup, message=FALSE, warning=FALSE}
@@ -57,9 +57,10 @@ if(!requireNamespace("kableExtra", quietly=TRUE)) {
 }
 library(kableExtra)
 ```
+Package *knitr* and *kableExtra* are mainly used for outputting figures in HTML format.
 
 ## 1.2 Search the Data Set
-
+Packages that connect and search databases of expression data are required to search possible data sets. Package *GEOmetadb* provides the metadata of the expression data in Gene Expression Omnibus (GEO). Package *DBI* allows us to connect to the GEO metadata database.
 ```{r connect, message=FALSE, warning=FALSE}
 # Set the meta data
 if (!file.exists('GEOmetadb.sqlite')) {
@@ -69,7 +70,7 @@ if (!file.exists('GEOmetadb.sqlite')) {
 # Connect to newly downloaded GEO meta data database
 con <- DBI::dbConnect(RSQLite::SQLite(), 'GEOmetadb.sqlite')
 ```
-
+Set up a variable `sql` for all the restrictions wanted for searching. The submission date is set to 2013-01-01 to browse data sets within ten years from now. The interested topic is set as "breast cancer." The interested organism is only humans. The technology is set as "high-throughput sequencing" to target a bulk RNASeq data set. The following code provides a list of satisfied data sets for choice.
 ```{r search, message=FALSE, warning=FALSE}
 # Search expression data about breast cancer
 sql <- paste("SELECT DISTINCT gse.title,gse.gse, gpl.title,",
@@ -94,7 +95,7 @@ counts_files <- rs$supplementary_file[grep(rs$supplementary_file,
 ```
 
 ## 1.3 Download the Data Set
-
+After browsing and checking, the data set **GSE89225** is selected, which contains expression data of 2 different T cells in 3 different tissues. The data set meets all requirements above, relates to a peer-reviewed paper, and has a reasonable sample size. Package *GEOquery* allows us to download interested data sets from GEO. Once the data set is downloaded successfully, we can read it into a data frame and add a column name for Ensembl gene ids. .  
 ```{r download data, message=FALSE, warning=FALSE}
 # Get expression data
 geo_id <- "GSE89225"
@@ -112,8 +113,9 @@ tcell_exp[1:15, 1:5] %>%
 
 
 # 2. Clean the Data and Map to HUGO Symbols
-
+***
 ## 2.1 Define the Groups
+The data set is separated and arranged into three groups: T cell type, tissue type and patients.
 ```{r group, message=FALSE, warning=FALSE}
 samples <- data.frame(lapply(colnames(tcell_exp)[2:35], 
                              FUN=function(x){unlist(strsplit(x, split = "_"))}))
@@ -127,6 +129,7 @@ samples[1:10, ] %>%
 ```
 
 ## 2.2 Clean the Data Set
+The data set is sorted by frequency of Ensembl gene id for duplicate checking.
 ```{r duplicate, message=FALSE, warning=FALSE}
 # Check for duplicated genes
 summarized_gene_counts <- sort(table(tcell_exp$ensembl_gene_id), decreasing = TRUE)
@@ -136,13 +139,13 @@ table(tcell_exp$ensembl_gene_id)[1:15] %>%
   kableExtra::kable_classic(full_width = F, html_font = "Cambria")
 ```
 
-There's no duplicated gene, but there are 5 invalid Ensembl gene ids:__alignment_not_unique, __ambiguous, __no_feature, __not_aligned and __too_low_aQual.
+There is no duplicated gene, but there are 5 invalid Ensembl gene ids: __alignment_not_unique, __ambiguous, __no_feature, __not_aligned and __too_low_aQual.
 ```{r remove invalid, message=FALSE, warning=FALSE}
 # Remove invalid Ensenbl gene ids
 valid_tcell_exp <- tcell_exp[grep("ENSG", tcell_exp$ensembl_gene_id), ]
 ```
 
-In the edgeR protocol, it is recommended to remove weakly expressed and non-informative features without at least 1 read per million in n of the samples, where n is the size of the smallest group of replicates. There are 10 samples (patients) for each group in this data set, so n = 10.
+In the *edgeR* protocol, it is recommended to remove weakly expressed non-informative features without at least 1 read per million in n of the samples, where n is the size of the smallest group of replicates. This data set has 10 samples (patients) for each group, so n = 10.
 ```{r outliers, message=FALSE, warning=FALSE}
 # Translate out counts into counts per million
 cpms <- edgeR::cpm(valid_tcell_exp[, 2:35])
@@ -158,9 +161,10 @@ filter_result %>%
   kableExtra::kbl(caption = "T Cell Expression Filtering Result") %>%
   kableExtra::kable_classic(full_width = F, html_font = "Cambria")
 ```
-In total, 45732 rows have been removed, including 5 invalid genes and 45727 low-counts genes.
+In total, 45,732 rows have been removed, including 5 invalid genes and 45,727 low-count genes.
 
 ## 2.3 Map to HUGO Symbols
+Package *biomaRt* provides id conversion from Ensembl gene id to HUGO symbol.
 ```{r id_conversion, message=FALSE, warning=FALSE}
 # Connect to the desired mart
 ensembl <- biomaRt::useMart("ensembl")
@@ -201,11 +205,19 @@ missing_tcell_exp[1:5,1:5] %>%
   kableExtra::kbl(caption = "HGNC Symbol Missing Data Set") %>%
   kableExtra::kable_classic(full_width = F, html_font = "Cambria")
 ```
+There is no duplicated HUGO symbol after merging.
+```{r, message=FALSE, warning=FALSE}
+check_hgnc_counts <- sort(table(annot_tcell_exp$hgnc_symbol), decreasing = TRUE)
+
+table(annot_tcell_exp$hgnc_symbol)[1:5] %>%
+  kableExtra::kbl(caption = "HGNC Symbol Frequency") %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria")
+```
 
 # 3. Apply Normalization
-
+***
 ## 3.1 Trimmed Mean of M-values (TMM) Normalization
-We first saved the previous annotated version as the original tcell expression for future comparison.
+The previous annotated version is saved as the `original_tcell_exp` for future comparison.
 ```{r save original, message=FALSE, warning=FALSE}
 original_tcell_exp <- annot_tcell_exp
 
@@ -213,7 +225,7 @@ original_tcell_exp[1:5,1:5] %>%
   kableExtra::kbl(caption = "Original Data Set") %>%
   kableExtra::kable_classic(full_width = F, html_font = "Cambria")
 ```
-Next, we used the TMM normalization technique for RNASeq with the edgeR package.
+Next, the TMM normalization technique is used for RNASeq with the *edgeR* package.
 ```{r tmm, message=FALSE, warning=FALSE}
 # Create an edgeR container for RNASeq count data
 original_data_matrix <- as.matrix(original_tcell_exp[, 3:36])
@@ -233,6 +245,7 @@ normalized_tcell_exp[1:5,1:5] %>%
 ```
 
 ## 3.2 Box Plots
+The box plots of the original and normalized data sets are shown below.
 ```{r original_box, message=FALSE, warning=FALSE}
 original_box <- log2(cpm(original_tcell_exp[, 3:36]))
 boxplot(original_box, xlab = "Samples", ylab = "log2 CPM", 
@@ -250,7 +263,10 @@ abline(h = median(apply(normalized_box, 2, median)), col = "red", lwd = 0.6, lty
 
 ```
 
+There is no significant difference between the original and normalized data set.
+
 ## 3.3 Density Plots
+The density plots of the original and normalized data sets are shown below.
 ```{r original_density, message=FALSE, warning=FALSE}
 original_density <- apply(log2(cpm(original_tcell_exp[, 3:36])), 2, density)
 
@@ -303,7 +319,10 @@ legend("topright", colnames(normalized_box), col = cols2, lty = ltys2, cex = 0.7
        border = "black", text.col = cols2, merge = TRUE, bg = "white")
 ```
 
+There is no significant difference between the original and normalized data set.
+
 ## 3.4 Multidimensional Scaling (MDS) Plot
+The MDS plots of the original and normalized data sets are shown below.
 ```{r original_MDS, message=FALSE, warning=FALSE}
 limma::plotMDS(original_tcell_exp[, 3:36], 
                labels = samples$tissue_type, 
@@ -318,34 +337,32 @@ limma::plotMDS(normalized_tcell_exp[, 3:36],
                main = "MDS Plot - Normalized")
 ```
 
-# 4. Interpret and Document
+There is a significant difference between the original and normalized data sets. After normalization, the NBP group clusters to the left, and the tumor group clusters in the middle.
 
+# 4. Interpret and Document
+***
 ## 4.1 Questions
 
 ### What are the control and test conditions of the dataset?
-The control conditions are cells and tissues' environments (eg. treatment, growth and extraction protocol, etc...). The test conditions are different cells (regulatory T cells and conventional CD4 T cells) and different tissues (tumor, normal breast parenchyma, peripheral blood).
+The control conditions are cells and tissues' environments (e.g. treatment, growth and extraction protocol). The test conditions are different cells (regulatory T cells and conventional CD4 T cells) and different tissues (tumor, normal breast parenchyma, peripheral blood).
 
 ### Why is the dataset of interest to you?
-Breast cancer was my first genetic topic in high school, it has a close relation to gene mutations. This data set belongs to a published paper within 10 years, and it contains detailed data labeling and reasonable sample size for personal analysis.
+Breast cancer was my first genetic topic in high school and is closely related to gene mutations. This data set belongs to a published paper within ten years and contains detailed data labelling and a reasonable sample size for personal analysis.
 
 ### Were there expression values that were not unique for specific genes? How did you handle these?
-I checked the frequency of each Ensembl gene id to eliminate any duplicated gene. There was no duplicated gene, but there were 5 invalid Ensembl gene ids that I removed in section *2.2 Clean the Data Set*.
+I checked each Ensembl gene id's frequency to eliminate duplicated genes. There was no duplicated gene, but I removed 5 invalid Ensembl gene ids in section *2.2 Clean the Data Set*.
 
 ### Were there expression values that could not be mapped to current HUGO symbols?
-Yes, there were 642 (~3.6%) Ensembl gene ids that could not be mapped to current HUGO symbols. I cannot check their potential HUGO symbols since the data set lacks of a column for gene name. However, I decided to keep them in my data set since they might be helpful for my future analysis.
+Yes, 642 (~3.6%) Ensembl gene ids could not be mapped to current HUGO symbols. I cannot check their potential HUGO symbols since the data set lacks a column for gene names. However, I decided to keep them in the data set since they might be helpful for future analysis.
 
 ### How many outliers were removed?
-45,727 outliers have been removed from the data set according to edgeR protocol about low-counts features. Filtering details are shown in section *2.2 Clean the Data Set*.
+45,727 outliers have been removed from the data set according to edgeR protocol about low-count features. Filtering details are shown in section *2.2 Clean the Data Set*.
 
 ### How did you handle replicates?
-I checked for replicates in section *2.2 Clean the Data Set*, and there was none.
+I checked for replicates in sections *2.2 Clean the Data Set* and *2.3 Map to HUGO Symbols*, and there were none.
 
 ### What is the final coverage of your dataset?
-The final coverage of my data set is 17,950 genes and 34 samples (10 patients).
+The final coverage of the data set is 17,950 genes and 34 samples (10 patients).
 
-
-```{r, message=FALSE, warning=FALSE}
-
-```
 
 ## 4.2 References
