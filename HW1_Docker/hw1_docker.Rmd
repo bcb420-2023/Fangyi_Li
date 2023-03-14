@@ -1,0 +1,38 @@
+---
+title: "BCB420 - Computational System Biology"
+subtitle: "Homework #1 - Docker"
+author: "Fangyi Li"
+date: "Janurary 13th, 2023"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 1
+---
+
+# 1. Create a 5 by 10 matrix of random integers
+```{r}
+set.seed(1005937774)
+rand_int <- sample.int(100, size = 50, replace = FALSE)
+rand_matrix <- matrix(rand_int, nrow = 5, ncol = 10)
+rand_matrix
+```
+
+# 2. Define column names cond1, cond2, cond3, cond4, cond5, ctrl1, ctrl2, ctrl3, ctrl4, ctrl5
+```{r}
+colnames(rand_matrix) <- c("cond1", "cond2", "cond3", "cond4", "cond5", "ctrl1", "ctrl2", "ctrl3", "ctrl4", "ctrl5")
+rand_matrix
+```
+
+# 3. Define row names as gene1, gene2, gene3...
+```{r}
+rownames(rand_matrix) <- c("gene1", "gene2", "gene3", "gene4", "gene5")
+rand_matrix
+```
+
+# 4. Compute the fold change for each gene
+```{r}
+cond <- rand_matrix[ , 1:5]
+cont <- rand_matrix[ , 6:10]
+fold_change <- log2(cond/cont)
+fold_change
+```
