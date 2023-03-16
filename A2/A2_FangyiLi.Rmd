@@ -59,11 +59,6 @@ if(!requireNamespace("kableExtra", quietly=TRUE)) {
 }
 library(kableExtra)
 
-if (!requireNamespace("tidyr", quietly = TRUE)) {
-  install.packages("tidyr")
-}
-library(tidyr)
-
 if (!requireNamespace("ComplexHeatmap", quietly = TRUE)) {
   install.packages("ComplexHeatmap")
 }
